@@ -1,0 +1,1012 @@
+---
+title: "iq_reclass"
+author: "Luke Salvato"
+date: "11/24/2020"
+output: 
+  html_document:
+  toc_float: true
+  theme: default
+  highlight: tango
+  
+---
+####Packages
+```{r packages}
+library(sf)
+library(raster)
+library(tmap) 
+library(tmaptools)
+library(tidyverse)
+```
+
+#DATA
+```{r data}
+getwd()
+
+land_iq_reclass <- jsonlite::fromJSON("/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/rice_area/data/raw/full_iq_reclass_20220302.geojson")
+```
+
+
+
+```{r}
+df_tib<- tibble(year_code=c(
+"CDL_2007b",
+"CDL_2008",
+"CDL_2009",
+"CDL_2010",
+"CDL_2011",
+"CDL_2012",
+"CDL_2013",
+"CDL_2014",
+"CDL_2015",
+"CDL_2016",
+"CDL_2017",
+"CDL_2018",
+"CDL_2019",
+"CDL_2020",
+"CDL_2021")) %>% 
+  mutate("year" = cbind(2007:2021))
+```
+
+```{r}
+data_extract <- df_tib%>%
+  mutate(data = map(year_code, ~pull(land_iq_reclass$features$properties,.)%>%
+                        mutate(OBJECTID_1=land_iq_reclass$features$properties$OBJECTID_1)%>%
+                      mutate(Crop2016 = land_iq_reclass$features$properties$Crop2016)%>% 
+                      pivot_longer(c(-OBJECTID_1, -Crop2016),
+                                   values_to="count", names_to="CDL_class") %>%
+                      filter(!is.na(count)))) %>% 
+      unnest(data)%>%
+  dplyr::select(-year_code) %>%
+  group_by(OBJECTID_1, year) %>%
+  mutate(pixel_sum = sum(count),
+         count_perc = 100* count/pixel_sum) %>%
+  ungroup() %>%
+  dplyr::select(OBJECTID_1, everything())
+```
+
+```{r}
+data_mode <- data_extract %>%
+  group_by(OBJECTID_1, year) %>%
+  filter(count_perc==max(count_perc)) %>%
+  ungroup()
+
+data_mode %>%
+  ggplot(aes(x=count_perc))+
+  geom_histogram()
+```
+
+```{r}
+data_mode_then_has_rice <- data_extract %>%
+  group_by(OBJECTID_1, year) %>%
+  filter(count_perc==max(count_perc)) %>%
+  ungroup() %>% 
+  mutate(rice = case_when(CDL_class == "3" ~ 1,
+                          CDL_class != "3" ~ 0)) %>% 
+  group_by(OBJECTID_1) %>% 
+  mutate(has_rice = sum(rice)) %>% 
+  ungroup()%>% 
+  filter(has_rice > 0)
+
+
+
+
+data_mode_then_has_rice %>% 
+  ggplot(aes(x=count_perc))+
+  geom_histogram(binwidth = 1)
+```
+
+
+```{r}
+data_select <- data_mode_then_has_rice %>%
+  group_by(OBJECTID_1) %>% 
+  mutate(m2 = round(pixel_sum*900, 2)) %>% 
+  mutate(acres = round(m2*0.000247105, 2)) %>% 
+  ungroup() %>% 
+  mutate(year=as.numeric(year))
+
+
+
+#summar <- data_select %>% group_by(CDL_class) %>% summarise(acreage = sum(acres)) #%>% 
+  
+
+#categories <- unique(data_select$CDL_class) 
+#numberOfCategories <- length(categories)
+
+crops <- data_select  %>% 
+  mutate(Crop = case_when(CDL_class==3~"rice",
+                          CDL_class==61~"fallow",
+                          CDL_class==36~"alfalfa",
+                          CDL_class==76~"walnut",
+                          CDL_class==75~"almond",
+                          CDL_class %in% c(176,37)~"grasses", #grassland/ pasture
+                          CDL_class %in% c(24,42,1,33,54,6)~"annual crop", 
+                          #winter wheat, dry beans, corn, safflower, tomatoes, sunflower
+                          CDL_class %in% c(195,111,121,131,190,63,44,122,123,124,92,152)~"other other", 
+                          #herbaceous wetland, open water, developed/open space, barren, woody wetlands, forest, other crops, developed/low intensity, developed/med intesnity, aquaculture, shrubland
+                          CDL_class %in% c(27,224,205,4,28,59,2,213,53,22,49,13,50,236,58,48,226,225,222,
+                                           221,216,207,21,209,229,234,29,244,43,31, 47,208,23,51,12,228)~"other annual", 
+                          #rye, vetch, triticale, sorghum, oats, sod/grass seed, cotton, honeydew melons, peas, durum wheat, onions, pop or orn corn, cucumbers, dbl crop wint wheat/sorgum, double crop oats, corn, squash, strawberries, peppers, asparagus, barley, cantaloupes, pumpkins, dbl crop durum wht/sorgum, millet, cauliflower, potatoes, canola, misc fuits & vegetables, garlic, spring wheat, chick peas, sweet corn, double crop triticale/corn. 
+                          TRUE ~ "other perennial")) %>% 
+  dplyr::select(-CDL_class) %>% 
+  mutate(crop_year = as.character(paste0("crop_", year, "_name"))) %>% 
+  unnest(crop_year)
+
+summar <- crops %>% group_by(Crop, year) %>% summarise(acreage = sum(acres))
+getwd()
+write_csv(crops, "/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/soils/data/07_to_21_CDL_reclassifed_20220726.csv")
+```
+
+
+```{r}
+crops_wide <- crops %>% 
+  dplyr::select(OBJECTID_1, crop_year, Crop, acres) %>% 
+  pivot_wider(names_from = crop_year, values_from = Crop, values_fn = list) %>% 
+  group_by(OBJECTID_1, acres) %>% 
+  ungroup %>% 
+  unnest(cols = c(crop_2007_name, crop_2008_name, crop_2009_name, crop_2010_name, 
+    crop_2011_name, crop_2012_name, crop_2013_name, crop_2014_name, 
+    crop_2015_name, crop_2016_name, crop_2017_name, crop_2018_name, 
+    crop_2019_name, crop_2020_name, crop_2021_name))
+  #unite(string, "2008":"2019", sep = "", remove = TRUE, na.rm = TRUE) %>% 
+  #mutate(rotations = str_count(string, "10"))
+getwd()
+#write_csv(crops_wide, "/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/soils/data/07_to_21_CDL_reclassifed_WIDE_20220726.csv")
+```
+
+
+```{r}
+diff <- crops_wide %>% 
+  mutate("2008" = paste0(crop_2007_name,
+                            " -> ", 
+                            crop_2008_name)) %>%
+  mutate("2009" = paste0(crop_2008_name,
+                            " -> ", 
+                            crop_2009_name)) %>%
+  mutate("2010" = paste0(crop_2009_name,
+                            " -> ", 
+                            crop_2010_name)) %>%
+  mutate("2011" = paste0(crop_2010_name,
+                            " -> ", 
+                            crop_2011_name)) %>%
+  mutate("2012" = paste0(crop_2011_name,
+                            " -> ", 
+                            crop_2012_name)) %>%
+  mutate("2013" = paste0(crop_2012_name,
+                            " -> ", 
+                            crop_2013_name)) %>%
+  mutate("2014" = paste0(crop_2013_name,
+                            " -> ", 
+                            crop_2014_name)) %>%
+  mutate("2015" = paste0(crop_2014_name,
+                            " -> ", 
+                            crop_2015_name)) %>%
+  mutate("2016" = paste0(crop_2015_name,
+                            " -> ", 
+                            crop_2016_name)) %>%
+  mutate("2017" = paste0(crop_2016_name,
+                            " -> ", 
+                            crop_2017_name)) %>%
+  mutate("2018" = paste0(crop_2017_name,
+                            " -> ", 
+                            crop_2018_name)) %>%
+  mutate("2019" = paste0(crop_2018_name,
+                            " -> ", 
+                            crop_2019_name)) %>% 
+    mutate("2020" = paste0(crop_2019_name,
+                            " -> ", 
+                            crop_2020_name)) %>% 
+    mutate("2021" = paste0(crop_2020_name,
+                            " -> ", 
+                            crop_2021_name)) %>% 
+  dplyr::select(OBJECTID_1, acres, as.character(2008:2021))
+  
+  #dplyr::select(OBJECTID_1, acres, "2008", "2009","2010", "2011","2012", "2013","2014","2015","2016","2017","2018","2019")
+
+getwd()
+#save to SSURGO
+#write_csv(diff, "/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/soils/data/07_to_21_change_detection_20220726.csv")
+
+```
+
+```{r}
+diff <- read_csv("/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/soils/data/07_to_21_change_detection_20220726.csv")
+
+diff_long <- diff %>% 
+  pivot_longer(cols = 3:16, names_to = "year", values_to = "type")
+```
+
+JOIN TO GEOMETRIES
+```{r}
+fields <- st_read("/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/soils/data/all_fields_no_wetland_no_urban") %>% 
+  dplyr::select(OBJECTID_1) %>%
+  st_zm() 
+
+
+crops_field_join <- left_join(crops_wide, fields, by = "OBJECTID_1")
+getwd()
+st_write(crops_field_join, "/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/rice_area/reclassified_CDL/data/2007_to_2021_rice_area_fields_and_crops_20220413.geojson", delete_layer = TRUE)
+#2007_to_2021_rice_area_fields_and_crops_20220302.geojson
+
+
+diff_field_join <- left_join(diff, fields, by="OBJECTID_1")
+getwd()
+#st_write(diff_field_join, "2007_to_2018_cdl_reclassified_with_iq.shp")
+```
+
+GET COUNTIES
+```{r}
+counties <- st_read("/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/rice_area/data/raw/CA_Counties") %>% 
+  dplyr::select(NAME) %>%
+  st_zm() %>% 
+  filter(NAME %in% c("Sutter", "Butte", "Glenn", "Colusa", "Yolo", "Sacramento", "Placer", "San Joaquin", "Yuba", "Tehama", "Nevada", "Merced", "Stanislaus","Solano", "Contra Costa", "Alameda", "Fresno", "Madera")) %>% 
+  st_as_sf()
+```
+
+# Fields and Counties spatial Join
+Make county level acreage estimates
+```{r}
+crops_fields_sf <- crops_field_join %>% 
+  st_as_sf()
+
+crops_fields_sf %>% 
+  pivot_longer(c(-OBJECTID_1, -acres, -geometry),
+                                 values_to="type", names_to="year") %>% 
+  filter(type  == "rice") %>% 
+  group_by(year) %>% 
+  summarise(acreage = sum(acres))
+
+
+
+counties_sf <- counties %>% 
+  st_as_sf() %>% 
+    st_transform(crs = st_crs(crops_fields_sf))
+
+counties_fields_join <- st_join(counties_sf, crops_fields_sf)
+
+cfj_long <- counties_fields_join %>% 
+    pivot_longer(c(-OBJECTID_1, -acres, -geometry, -NAME),
+                                 values_to="type", names_to="year")
+
+county_level_acreage <- cfj_long %>% 
+  filter(type  == "rice") %>% 
+  group_by(NAME, year) %>% 
+  summarise(acreage = sum(acres))
+
+write_csv(county_level_acreage, file = "/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/NASS/data/processed/CDL_reclassified_county_level_acreage_20221024.csv")
+```
+
+557031.4			
+506358.8			
+540083.2			
+539627.8			
+561340.2			
+542331.2			
+549933.9			
+445247.2			
+424115.8			
+527064.5	
+433788.7			
+494702.6			
+489479.1			
+504237.7			
+396783.3	
+
+FROM RICE TO PERENNIAL DIFF PLOT
+```{r}
+s <- diff_long %>%
+  complete(year,type, fill = list(acres=2)) %>% 
+  filter(type %in% c("rice -> almond", "rice -> walnut", "rice -> other perennial")) %>% 
+  group_by(year, type) %>%
+  summarise(acreage = sum(acres))
+ 
+ggplot(data=s, aes(x=year, y=acreage, fill=type)) +
+geom_bar(stat="identity", position=position_dodge(), color = "black")+
+  scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+  scale_y_continuous(name = "Acres", labels = scales::comma) +
+  xlab("Change From Previous Year")+
+  theme_minimal() +
+   theme(legend.position = c(0.8, 0.8))+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank())+
+  ggtitle("Change from Rice to Perennial")
+ 
+
+```
+
+PERENIIAL DIFF MAP
+```{r}
+library(tmap)
+
+p1 <- diff_field_join %>% 
+  as_tibble() %>% 
+  pivot_longer(c(-OBJECTID_1, -acres, -geometry),
+                                 values_to="type", names_to="year") %>% 
+  filter(type %in% c("rice -> almond", "rice -> walnut", "rice -> other perennial")) %>%
+  rename("field size (acres)" = acres) %>% 
+  st_sf() %>% 
+  st_centroid()
+
+tmap_mode("plot")
+perennial <- tm_basemap("OpenStreetMap.Mapnik") +
+  tm_shape(p1) +
+  tm_dots(shape = "type", col = "year", size = "field size (acres)")+
+  #tm_shape(counties)+
+  #tm_polygons(alpha = 0)+
+  #tm_text("NAME", size = 0.7, alpha = 0.5)+
+   tm_layout(legend.outside = TRUE)
+perennial
+getwd()
+tmap_save(perennial, filename="perennial_map.png")
+```
+
+TO ALMOND (FROM ALL) PLOT
+```{r}
+to_almond <- diff_long %>%
+  complete(year,type, fill = list(acres=2)) %>% 
+  #filter(type %in% c("rice -> almond", "rice -> walnut", "rice -> other perennial")) %>% 
+  filter(str_detect(type, pattern = "-> almond")) %>% 
+  filter(!type %in% c("almond -> almond" , "walnut -> almond",
+                      "other other -> almond")) %>% 
+  group_by(year, type) %>%
+  summarise(acreage = sum(acres)) %>% 
+  ungroup() %>% 
+  #group_by(year) %>% 
+  mutate(type = fct_reorder(type, desc(-acreage))) %>% 
+  ungroup()
+ 
+ggplot(data=to_almond, aes(x=year, y=acreage, fill=type)) +
+geom_bar(stat="identity", #position=position_dodge(), 
+         color = "black")+
+  scale_fill_manual(values=c(#"#000000","#999999","#FFDB6D", 
+                             "#C4961A", "#F4EDCA", 
+                "#D16103", "#C3D7A4", "#52854C", "#4E84C4", "#293352"))+
+  scale_y_continuous(name = "Acres", labels = scales::comma) +
+  xlab("Change From Previous Year")+
+  theme_minimal() +
+   theme(legend.position = c(0.3, 0.7))+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank())+
+  ggtitle("Change to Almond")
+ 
+
+```
+TO ALMOND MAP
+```{r}
+to_a <- diff_field_join %>% 
+  as_tibble() %>% 
+  pivot_longer(c(-OBJECTID_1, -acres, -geometry),
+                                 values_to="type", names_to="year") %>% 
+  #filter(type %in% c("rice -> almond", "rice -> walnut", "rice -> other perennial")) %>%
+  filter(str_detect(type, pattern = "-> almond")) %>% 
+  filter(!type %in% c("almond -> almond" , "walnut -> almond",
+                      "other other -> almond")) %>% 
+  rename("field size (acres)" = acres) %>% 
+  st_sf() %>% 
+  st_centroid()
+
+tmap_mode("plot")
+new_alm <- tm_basemap("OpenStreetMap.Mapnik") +
+  tm_shape(to_a) +
+  tm_dots(col = "year", size = 0.4, alpha = 0.9, palette = "viridis", legend.hist = TRUE)+#, col = "year")+#, size = "field size (acres)")+
+#  tm_shape(counties)+
+#  tm_polygons(alpha = 0)+
+ # tm_text("NAME", size = 0.7, alpha = 0.5)+
+   tm_layout(legend.outside = TRUE, legend.text.size = 2 , title = "New Almond Fields")
+new_alm
+getwd()
+tmap_save(new_alm, filename="new_alm_map.png")
+```
+TOTAL ALMOND / WALNUT ACREAGE PLOT
+```{r}
+
+crops1 <- crops %>% 
+  mutate(year = as_factor(year)) %>% 
+  group_by(Crop) %>% 
+  mutate(Crop = fct_reorder(Crop, desc(acres))) %>% 
+  ungroup() %>% 
+  mutate(year = paste0("'",str_sub(year, start=3))) 
+  
+#unique(crops1$Crop) 
+#length(categories)
+
+crops1 %>% 
+  mutate(Crop = factor(Crop, levels = c("walnut", "almond","alfalfa", "other annual", "grasses", "other perennial", "other other", "annual crop","fallow","rice"))) %>% 
+  filter(Crop == "almond") %>% 
+ggplot(aes(x=year, y=acres, fill=Crop, group = Crop)) +
+geom_bar(stat="identity")+#, color = "black")+
+  scale_fill_manual(values=c("#000000","#999999","#FFDB6D", "#C4961A", "#F4EDCA", 
+                "#D16103", "#C3D7A4", "#52854C", "#4E84C4", "#293352"))+
+  scale_y_continuous(name = "Acres", labels = scales::comma) +
+  xlab("")+
+  theme_minimal() +
+   #theme(legend.position = c(1.2, 1.2))+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank())+
+  ggtitle("Almond Acreage") 
+  #geom_hline(yintercept=c(100000,200000,300000,400000,500000,600000), size = .5)
+
+
+crops1 %>% 
+  mutate(Crop = factor(Crop, levels = c("walnut", "almond","alfalfa", "other annual", "grasses", "other perennial", "other other", "annual crop","fallow","rice"))) %>% 
+  filter(Crop == "walnut") %>% 
+ggplot(aes(x=year, y=acres, fill=Crop, group = Crop)) +
+geom_bar(stat="identity")+#, color = "black")+
+  scale_fill_manual(values=c("#000000","#999999","#FFDB6D", "#C4961A", "#F4EDCA", 
+                "#D16103", "#C3D7A4", "#52854C", "#4E84C4", "#293352"))+
+  scale_y_continuous(name = "Acres", labels = scales::comma) +
+  xlab("")+
+  theme_minimal() +
+   #theme(legend.position = c(1.2, 1.2))+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank())+
+  ggtitle("Walnut Acreage") 
+
+```
+
+
+TO WALNUT (FROM ALL) PLOT
+```{r}
+to_walnut <- diff_long %>%
+  complete(year,type, fill = list(acres=2)) %>% 
+  #filter(type %in% c("rice -> almond", "rice -> walnut", "rice -> other perennial")) %>% 
+  filter(str_detect(type, pattern = "-> walnut")) %>% 
+  filter(!type %in% c("almond -> walnut" ,
+                      "walnut -> walnut",
+                      "other other -> walnut"
+                      )) %>% 
+  group_by(year, type) %>%
+  summarise(acreage = sum(acres)) %>% 
+  ungroup() %>% 
+  #pivot_wider(names_from = type, values_from = acreage, values_fn = list) %>%
+  #select(-year) %>% 
+  #transmute(total=rowSums(.))
+  mutate(type = fct_reorder(type, desc(-acreage))) %>% 
+  ungroup()
+ 
+ggplot(data=to_walnut, aes(x=year, y=acreage, fill=type)) +
+geom_bar(stat="identity", #position=position_dodge(),
+         color = "black")+
+  scale_fill_manual(values=c("#000000","#999999","#FFDB6D", 
+                             "#C4961A", "#F4EDCA", 
+                "#D16103", "#C3D7A4", "#52854C", "#4E84C4", "#293352"))+
+  scale_y_continuous(name = "Acres", labels = scales::comma) +
+  xlab("Change From Previous Year")+
+  theme_minimal() +
+   theme(legend.position = c(0.3, 0.7))+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank())+
+  ggtitle("Change to Walnut")
+ 
+
+```
+```{r}
+m <- mtcars %>% select(cols) #%>% transmute(x=rowSums(.))
+```
+
+
+
+TO WALNUT MAP
+```{r}
+to_w <- diff_field_join %>% 
+  as_tibble() %>% 
+  pivot_longer(c(-OBJECTID_1, -acres, -geometry),
+                                 values_to="type", names_to="year") %>% 
+  #filter(type %in% c("rice -> almond", "rice -> walnut", "rice -> other perennial")) %>%
+   filter(str_detect(type, pattern = "-> walnut")) %>% 
+  filter(!type %in% c("almond -> walnut" ,
+                      "walnut -> walnut",
+                      "other other -> walnut")) %>% 
+  rename("field size (acres)" = acres) %>% 
+  st_sf() %>% 
+  st_centroid()
+
+tmap_mode("plot")
+new_wal <- tm_basemap("OpenStreetMap.Mapnik") +
+  tm_shape(to_w) +
+  tm_dots(col = "year", size = 0.4, alpha = 0.9, palette = "viridis", legend.hist = TRUE )+#, col = "year")+#, size = "field size (acres)")+
+ # tm_shape(counties)+
+#  tm_polygons(alpha = 0)+
+ # tm_text("NAME", size = 0.7, alpha = 0.5)+
+   tm_layout(legend.outside = TRUE, legend.text.size = 1.5 , title = "New Walnut Fields")
+new_wal
+getwd()
+tmap_save(new_wal, filename="new_wal_map.png")
+
+
+```
+
+PERENNIAL FAILURES PLOT
+```{r}
+per_fail_fig <- diff_long %>%
+  complete(year,type, fill = list(acres=2)) %>% 
+  #filter(type %in% c("rice -> almond", "rice -> walnut", "rice -> other perennial")) %>% 
+  filter(str_detect(type, pattern = c("walnut ->", "almond ->"))) %>% 
+   filter(type %in% c("almond -> rice", "walnut -> rice",
+                     "almond -> annual crop", "walnut -> annual crop",
+                     #"almond -> alfalfa", "walnut -> alfalfa", 
+                     "almond -> fallow", "walnut -> fallow")) %>% 
+  # #filter(!type %in% c("almond -> walnut" ,
+  #                     "walnut -> walnut",
+  #                     "walnut -> almond",
+  #                     "almond -> almond",
+  #                     "walnut -> other perennial",
+  #                     "almond -> other perennial")) %>% 
+  group_by(year, type) %>%
+  summarise(acreage = sum(acres)) %>% 
+  ungroup() %>% 
+  #pivot_wider(names_from = type, values_from = acreage, values_fn = list) %>%
+  #select(-year) %>% 
+  #transmute(total=rowSums(.))
+  #mutate(type = fct_reorder(type, desc(-acreage))) %>% 
+  ungroup()
+
+per_fail_fig %>% 
+  mutate(type = factor(type, levels = c("almond -> annual crop", "almond -> fallow","almond -> rice", "walnut -> annual crop", "walnut -> fallow", "walnut -> rice"))) %>%
+ggplot(aes(x=year, y=acreage, fill=type)) +
+geom_bar(stat="identity", #position=position_dodge(),
+         color = "black")+
+  
+  scale_fill_brewer(palette = "PRGn")+
+  # scale_fill_manual(values=c(#"#000000",
+  #   "#999999","#FFDB6D", 
+  #                            "#C4961A" 
+  # #"#F4EDCA", 
+  #               #"#D16103", "#C3D7A4", "#52854C", "#4E84C4", "#293352"
+  #               ))+
+  scale_y_continuous(name = "Acres", labels = scales::comma) +
+  xlab("Change From Previous Year")+
+  theme_minimal() +
+   theme(legend.position = c(0.4, 0.8))+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank())+
+  ggtitle("Change from Almond or Walnut")
+
+```
+
+ALMOND FAILURES MAP 
+```{r}
+per_fail <- diff_field_join %>% 
+  as_tibble() %>% 
+  pivot_longer(c(-OBJECTID_1, -acres, -geometry),
+                                values_to="type", names_to="year") %>% 
+  filter(type %in% c("almond -> rice", "walnut -> rice",
+                     "almond -> annual crop", "walnut -> annual crop",
+                     #"almond -> alfalfa", "walnut -> alfalfa", 
+                     "almond -> fallow", "walnut -> fallow"
+                     #"almond -> grasses", "walnut -> grasses"
+                     )) %>%
+  #filter(str_detect(type, pattern = c("almond ->", "walnut ->"))) %>% 
+  #filter(str_detect(type, pattern = c("rice", "alfalfa", "annual crop", "fallow")))%>% 
+  #filter(!type %in% c("almond -> almond" , "walnut -> almond",
+   #                   "almond -> other other", "walnut ->)) %>% 
+  rename("field size (acres)" = acres) %>% 
+  st_sf() %>% 
+  st_centroid()
+
+tmap_mode("plot")
+per_fail_map <- tm_basemap("OpenStreetMap.Mapnik") +
+  tm_shape(per_fail) +
+  tm_dots(col = "type", size = 0.5, alpha = 1, palette = "PRGn")+#, col = "year")+#, size = "field size (acres)")+
+  tm_shape(counties)+
+  tm_polygons(alpha = 0)+
+  tm_text("NAME", size = 0.7, alpha = 0.5)+
+   tm_layout(legend.outside = TRUE, legend.text.size = 1, title = "Change from Perennials", title.size = 2)
+per_fail_map
+getwd()
+tmap_save(per_fail_map, filename="per_fail_map.png")
+```
+
+
+TO OTHER PERENNIAL (FROM ALL) PLOT - just to see how things look
+```{r}
+s <- diff_long %>%
+  complete(year,type, fill = list(acres=2)) %>% 
+  #filter(type %in% c("rice -> almond", "rice -> walnut", "rice -> other perennial")) %>% 
+  filter(str_detect(type, pattern = "-> other perennial")) %>% 
+  # filter(!type %in% c("almond -> walnut" ,
+  #                     "walnut -> walnut",
+  #                     "other other -> walnut"
+  #                     )) %>% 
+  group_by(year, type) %>%
+  summarise(acreage = sum(acres)) %>% 
+  ungroup() %>% 
+  #group_by(year) %>% 
+  mutate(type = fct_reorder(type, desc(acreage))) %>% 
+  ungroup()
+ 
+ggplot(data=s, aes(x=year, y=acreage, fill=type)) +
+geom_bar(stat="identity", position=position_dodge(), color = "black")+
+  scale_fill_manual(values=c("#000000","#999999","#FFDB6D", 
+                             "#C4961A", "#F4EDCA", 
+                "#D16103", "#C3D7A4", "#52854C", "#4E84C4", "#293352"))+
+  scale_y_continuous(name = "Acres", labels = scales::comma) +
+  xlab("Change From Previous Year")+
+  theme_minimal() +
+   theme(legend.position = c(0.3, 0.7))+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank())+
+  ggtitle("Change to OP")
+ 
+
+```
+ANNUAL DIFF PLOT
+```{r}
+s <- diff_long %>%
+  complete(year,type, fill = list(acres=2)) %>% 
+  filter(type %in% c("rice -> annual crop", "rice -> alfalfa", "rice -> other annual", "rice -> grasses")) %>% #, "rice -> other other")) %>% 
+  group_by(year, type) %>%
+  summarise(acreage = sum(acres)) %>% 
+  mutate(type = fct_relevel(type, "rice -> annual crop", "rice -> alfalfa", "rice -> other annual", "rice -> grasses"))#, "rice -> other other"))
+ 
+ggplot(data=s, aes(x=year, y=acreage, fill=type)) +
+geom_bar(stat="identity", position=position_dodge(), color = "black")+
+  scale_fill_manual(values=c("#999999", "#C4961A", "#56B4E9","#52854C"))+#, "#56B4E9","#293352"))+
+  scale_y_continuous(name = "Acres", labels = scales::comma) +
+  xlab("Change From Previous Year")+
+  theme_minimal() +
+   theme(legend.position = c(0.8, 0.8))+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank())+
+  ggtitle("From Rice to Annual Crop Changes")
+ 
+
+```
+ANNUAL TO RICE DIFF PLOT
+```{r}
+s <- diff_long %>%
+  complete(year,type, fill = list(acres=2)) %>% 
+  filter(type %in% c("annual crop -> rice", "alfalfa -> rice", "other annual -> rice","grasses -> rice")) %>%#, "other other -> rice")) %>% 
+  group_by(year, type) %>%
+  summarise(acreage = sum(acres)) %>% 
+  mutate(type = fct_relevel(type, "annual crop -> rice", "alfalfa -> rice", "other annual -> rice","grasses -> rice"))#, "other other -> rice"))
+ 
+ggplot(data=s, aes(x=year, y=acreage, fill=type)) +
+geom_bar(stat="identity", position=position_dodge(), color = "black")+
+  scale_fill_manual(values=c("#999999", "#C4961A", "#56B4E9","#52854C"))+#, "#56B4E9"))+#,"#293352"))+
+  scale_y_continuous(name = "Acres", labels = scales::comma) +
+  xlab("Change From Previous Year")+
+  theme_minimal() +
+   theme(legend.position = c(0.8, 0.8))+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank())+
+  ggtitle("From Anual Crop to Rice Changes")
+ 
+
+```
+#ANNUAL AND RICE INTERCHANGE PLOT
+```{r}
+an_r <- diff_long %>%
+  complete(year,type, fill = list(acres=2)) %>% 
+  filter(type %in% c("annual crop -> rice", "alfalfa -> rice", "other annual -> rice","grasses -> rice", "rice -> annual crop", "rice -> alfalfa", "rice -> other annual", "rice -> grasses")) %>%#, "other other -> rice")) %>% 
+  mutate(what = case_when(str_detect(type, pattern = "-> rice") ~ "_ to rice",
+                          str_detect(type, pattern = "rice ->") ~ "rice to _ ")) %>% 
+  mutate(what = case_when(str_detect(type, pattern = "-> rice") ~ "to rice",
+                          str_detect(type, pattern = "rice ->") ~ "from rice")) %>% 
+  group_by(year, type, what) %>%
+  summarise(acreage = sum(acres)) %>% 
+  ungroup() %>% 
+  mutate(hectares = acreage*0.404686) %>% 
+  mutate(year = paste0("'",str_sub(year, start=3))) %>% 
+  mutate(year = as_factor(year)) %>% 
+  mutate(type = fct_reorder(type, desc(-acreage)))
+ 
+
+
+### PLOT ###
+an_r_plot <- ggplot(data=an_r, aes(x=year, y=hectares, fill=type)) +
+geom_bar(stat="identity", color = NA)+
+  # scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"))+
+  scale_fill_brewer(palette = "Set2")+
+  scale_y_continuous(name = "ha", labels = scales::comma) +
+  xlab("Change From Previous Year")+
+  theme_bw() +
+   theme(legend.position = "bottom")+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank(),
+        strip.background = element_blank(),
+        #panel.grid.major = element_blank(), 
+        #panel.grid.minor = element_blank(),
+        legend.key.size = unit(1, 'cm'),
+        legend.text = element_text(size = 10),
+        strip.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 12),
+        panel.grid.major.x = element_blank() ,
+        )+
+  coord_cartesian(ylim = c(1000,15000))+
+  #ggtitle("Annuals to/from Rice ")+
+  facet_wrap(what~.)
+an_r_plot 
+getwd()
+
+
+ggsave(plot = an_r_plot, filename = "/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/rice_rotation/ms/output/figures/annuals_and_rice_time_series_20220923.png", width = 9, height = 6)
+
+
+ggsave(plot = an_r_plot, filename = "/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/rice_rotation/ms/output/figures/annuals_and_rice_time_series_20220923.svg", width = 9, height = 6)
+
+
+
+```
+
+
+```{r}
+from_rice_df <-an_r %>% filter(what == "from rice") %>% 
+mutate(type = fct_reorder(type, desc(-acreage)))
+  
+from_rice_plot <- ggplot(data=from_rice_df, aes(x=year, y=hectares, fill=type)) +
+geom_bar(stat="identity", color = NA)+
+    scale_fill_manual(values=c( "#009E73", "#56B4E9", "#E69F00","#999999"
+          #"#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+                             
+                               ))+
+  # scale_y_continuous(name = "ha", labels = scales::comma) +
+  #scale_fill_brewer(palette = "PRGn")+
+  xlab("Change From Previous Year")+
+  theme_bw() +
+   theme(legend.position = "bottom")+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank(),
+        strip.background = element_blank(),
+        )
+  #ggtitle("Annuals to/from Rice ")+
+  #facet_wrap(what~.)
+from_rice_plot
+getwd()
+
+
+to_rice_df <-an_r %>% filter(what == "to rice")%>% 
+mutate(type = fct_reorder(type, desc(-acreage)))
+  
+to_rice_plot <- ggplot(data=to_rice_df, aes(x=year, y=hectares, fill=type)) +
+geom_bar(stat="identity", color = NA)+
+ # scale_fill_manual(values=c(
+ #   
+ #   
+ #                             #"#FFDB6D",
+ #                              #"#C4961A",
+ #                              #"#F4EDCA",
+ #                              #"#D16103" ,
+ #                              "#C3D7A4",
+ #                              "#52854C" ,
+ #                              "#4E84C4",
+ #                              "#293352"
+ #                              ))+
+ #  #scale_color_viridis()+
+  scale_fill_brewer(palette = "PRGn", direction = -1, type = "seq")+
+  xlab("Change From Previous Year")+
+  theme_bw() +
+   theme(legend.position = "bottom")+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"),
+        axis.text.y = element_blank())+
+  theme(legend.title = element_blank(),
+        strip.background = element_blank(),
+        )+
+  coord_cartesian(ylim = c(0,15000))+
+labs(y = NULL)
+  #ggtitle("Annuals to/from Rice ")+
+  #facet_wrap(what~.)
+to_rice_plot
+
+
+both <- ggarrange(from_rice_plot, to_rice_plot)
+both
+
+
+
+ggsave(plot = an_r_plot, filename = "/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/rice_rotation/ms/output/figures/annuals_and_rice_time_series_20220921.png", width = 9, height = 10)
+```
+
+
+ANNUALS TO FROM RICE MAP
+```{r}
+ann <- diff_field_join %>% 
+  as_tibble() %>% 
+  pivot_longer(c(-OBJECTID_1, -acres, -geometry),
+                                 values_to="type", names_to="year") %>% 
+  filter(type %in% c("annual crop -> rice", "alfalfa -> rice", "other annual -> rice","grasses -> rice", "rice -> annual crop", "rice -> alfalfa", "rice -> other annual", "rice -> grasses")) %>%
+   mutate(change = case_when(str_detect(type, pattern = "-> rice") ~ " to rice",
+                          str_detect(type, pattern = "rice ->") ~ "from rice")) %>%
+  rename("field size (acres)" = acres) %>% 
+  ungroup() %>% 
+  st_sf() %>% 
+  st_centroid()
+
+tmap_mode("plot")
+annual <- tm_shape(ann) +
+  tm_dots(col = "change", size = 0.1, alpha = 0.9, palette = "Pastel1", legend.hist = TRUE)+#, col = "year", size = "field size (acres)")+
+ # tm_shape(counties)+
+  #tm_polygons(alpha = 0)+
+  #tm_text("NAME", size = 0.7, alpha = 0.5)+
+   tm_layout(legend.outside = TRUE, legend.text.size = 0.9 , title = "All annual types to/from rice",legend.title.size = 1.2)
+annual
+getwd()
+#tmap_save(annual, filename="annual_to_rice_map.png")
+
+```
+
+
+FALLOW PLOT
+```{r}
+
+s <- diff_long %>%
+  complete(year,type, fill = list(acres=2)) %>% 
+  filter(type %in% c("fallow -> rice", "rice -> fallow")) %>% 
+  group_by(year, type) %>%
+  summarise(acreage = sum(acres)) %>% 
+  mutate(type = fct_relevel(type, "fallow -> rice", "rice -> fallow"))
+ 
+ggplot(data=s, aes(x=year, y=acreage, fill=type)) +
+geom_bar(stat="identity", color = "black")+
+  scale_fill_manual(values=c("#52854C","#C4961A"))+
+  scale_y_continuous(name = "Acres", labels = scales::comma) +
+  xlab("Change From Previous Year")+
+  theme_minimal() +
+   theme(legend.position = c(0.2, 0.8))+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank())+
+  ggtitle("Rice to/from Fallow")
+  
+  
+ 
+
+```
+
+FALLOW MAPS
+```{r}
+r_to_f <- diff_field_join %>% 
+  as_tibble() %>% 
+  pivot_longer(c(-OBJECTID_1, -acres, -geometry),
+                                 values_to="type", names_to="year") %>% 
+  filter(type %in% c("rice -> fallow")) %>%
+  rename("field size (acres)" = acres) %>% 
+  st_sf() %>% 
+  st_centroid()
+
+tmap_mode("plot")
+r_to_f <- tm_shape(r_to_f) +
+  tm_dots(col = "year", size = 0.1, alpha = 0.9, palette = "Paired")+#, col = "year", size = "field size (acres)")+
+  tm_shape(counties)+
+  tm_polygons(alpha = 0)+
+  tm_text("NAME", size = 0.7, alpha = 0.5)+
+   tm_layout(legend.outside = TRUE, legend.text.size = 1.5 , title = "Rice to Fallow")
+r_to_f
+getwd()
+tmap_save(r_to_f, filename="rice_to_fallow_map.png")
+
+f_to_r <- diff_field_join %>% 
+  as_tibble() %>% 
+  pivot_longer(c(-OBJECTID_1, -acres, -geometry),
+                                 values_to="type", names_to="year") %>% 
+  filter(type %in% c("fallow -> rice")) %>%
+  rename("field size (acres)" = acres) %>% 
+  st_sf() %>% 
+  st_centroid()
+
+library(RColorBrewer)
+
+tmap_mode("plot")
+f_to_r <- tm_shape(f_to_r) +
+  tm_dots(col = "year", size = 0.1, alpha = 0.9, palette = "Paired")+ #, col = "year", size = "field size (acres)")+ palette = vir
+  tm_shape(counties)+
+  tm_polygons(alpha = 0)+
+  tm_text("NAME", size = 0.7, alpha = 0.5)+
+   tm_layout(legend.outside = TRUE, legend.text.size = 1.5 , title = "Fallow to Rice")
+f_to_r
+getwd()
+tmap_save(f_to_r, filename="fallow_to_rice_map.png")
+
+
+```
+
+FALLOW MAPS SHOWING ONLY MAJOR YEARS
+```{r}
+r_to_f <- diff_field_join %>% 
+  as_tibble() %>% 
+  pivot_longer(c(-OBJECTID_1, -acres, -geometry),
+                                 values_to="type", names_to="year") %>% 
+  filter(year %in% c(2014, 2017)) %>% 
+  filter(type %in% c("rice -> fallow")) %>%
+  rename("field size (acres)" = acres) %>% 
+  st_sf() %>% 
+  st_centroid()
+
+
+tmap_mode("plot")
+r_to_f <- tm_shape(r_to_f) +
+  tm_dots(col = "year", size = 0.1, alpha = 0.9, palette = "Dark2")+#, col = "year", size = "field size (acres)")+
+  tm_shape(counties)+
+  tm_polygons(alpha = 0)+
+  tm_text("NAME", size = 0.7, alpha = 0.5)+
+   tm_layout(legend.outside = TRUE, legend.text.size = 1.5 , title = "Rice to Fallow")
+r_to_f
+getwd()
+tmap_save(r_to_f, filename="rice_to_fallow_map_2014_and_2017.png")
+
+
+
+f_to_r <- diff_field_join %>% 
+  as_tibble() %>% 
+  pivot_longer(c(-OBJECTID_1, -acres, -geometry),
+                                 values_to="type", names_to="year") %>% 
+  filter(year %in% c(2016, 2018)) %>% 
+  filter(type %in% c("fallow -> rice")) %>%
+  rename("field size (acres)" = acres) %>% 
+  st_sf() %>% 
+  st_centroid()
+
+#library(RColorBrewer)
+
+tmap_mode("plot")
+f_to_r <- tm_shape(f_to_r) +
+  tm_dots(col = "year", size = 0.1, alpha = 0.9, palette = "Set1")+
+#, col = "year", size = "field size (acres)")+ palette = vir
+  tm_shape(counties)+
+  tm_polygons(alpha = 0)+
+  tm_text("NAME", size = 0.7, alpha = 0.5)+
+   tm_layout(legend.outside = TRUE, legend.text.size = 1.5 , title = "Fallow to Rice")
+f_to_r
+getwd()
+tmap_save(f_to_r, filename="fallow_to_rice_map_2016_and_2017.png")
+
+```
+
+
+
+SUMMARY PLOTS
+```{r}
+crops1 <- crops %>% 
+  mutate(year = as_factor(year)) %>% 
+  group_by(Crop) %>% 
+  mutate(Crop = fct_reorder(Crop, desc(acres))) %>% 
+  ungroup() %>% 
+  mutate(year = paste0("'",str_sub(year, start=3))) 
+  
+unique(crops1$Crop) 
+length(categories)
+
+crops1 %>% 
+  mutate(Crop = factor(Crop, levels = c("walnut", "almond","alfalfa", "other annual", "grasses", "other perennial", "other other", "annual crop","fallow","rice"))) %>% 
+ggplot(aes(x=year, y=acres, fill=Crop, group = Crop)) +
+geom_bar(stat="identity")+#, color = "black")+
+  scale_fill_manual(values=c("#000000","#999999","#FFDB6D", "#C4961A", "#F4EDCA", 
+                "#D16103", "#C3D7A4", "#52854C", "#4E84C4", "#293352"))+
+  scale_y_continuous(name = "Acres", labels = scales::comma) +
+  xlab("Crop totals by year")+
+  theme_minimal() +
+   #theme(legend.position = c(1.2, 1.2))+
+  theme(axis.text=element_text(size=12))+
+  theme(legend.background = element_rect(size=0.5, linetype="solid"))+
+  theme(legend.title = element_blank())+
+  ggtitle("Overall acreage")+ 
+  geom_hline(yintercept=c(100000,200000,300000,400000,500000,600000), size = .5)
+
+
+```
+
+
+# RICE time series PLOT
+```{r}
+data_select %>% filter(CDL_class ==3) %>% 
+  group_by(year) %>% 
+  dplyr::summarise(acres=sum(acres))%>% 
+  ggplot(aes(year, acres))+
+  geom_line()+
+  #labs(fill="Year") +
+  scale_y_continuous(name = "Acres", labels = scales::comma) +
+  geom_text(aes(x = year, y = acres, label = scales::comma(acres)), position = position_dodge(width = 1), vjust = -0.5, size = 3, labels = scales::comma)
+```
+
+	
