@@ -1,0 +1,186 @@
+---
+title: "NASS stats"
+author: "Luke Salvato"
+date: '2022-10-18'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+```
+
+```{r}
+#Sacaramento Valley
+nass <- read_csv("/Users/lukesalvato/Dropbox/Mac (3)/Documents/Downloads/D2E78866-6B01-398C-B203-94BFD86198A4.csv") 
+
+nass <- read_csv("/Users/lukesalvato/Dropbox/Mac (3)/Documents/Downloads/F2E1CC86-8E14-3A9B-8906-C2BFEC1C02ED.csv")
+
+nass_c <- nass %>% 
+ dplyr::select(Year, County, "County ANSI", Value) %>% 
+  rename(county_ansi_code = "County ANSI",
+         planted_rice_acres = Value,
+         county = County,
+         year = Year)
+
+nass_c %>% 
+  count(year)
+  
+nass_c %>% 
+  group_by(year, county) %>% 
+  summarise(sum = sum(planted_rice_acres))
+
+nass_c %>% 
+  ggplot(aes(x = year, y = planted_rice_acres))+
+  geom_line(aes(color = county))+
+  geom_point(aes(shape = county))
+```
+```{r}
+cdl_acreage <- read_csv("/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/NASS/data/processed/CDL_reclassified_county_level_acreage_20221024.csv")
+
+cdl_acreage %>% 
+  group_by(NAME) %>% 
+  count()
+
+cdl_acreage_maj_counties <- cdl_acreage %>% 
+ # filter(NAME %in% c("Butte", "Yuba", "Yolo", "Colusa", " Sutter", "Glenn", "Placer", "Solano", "Tehema")) %>% 
+  rename(County = NAME,
+         cdl_acreage = acreage) %>% 
+  mutate(year= as.factor(year)) %>% 
+  mutate(year = str_replace(year, "crop_", "")) %>% 
+  mutate(year = str_replace(year, "_name", ""))
+
+cdl_acreage_maj_counties %>% 
+  group_by(year) %>% 
+  count()
+
+nass_c_maj_counties <- nass_c %>% 
+   mutate(County = case_when(county == "BUTTE" ~ "Butte",
+                              county =="YUBA" ~ "Yuba",
+                              county == "YOLO" ~ "Yolo",
+                              county == "COLUSA" ~ "Colusa",
+                              county == "SUTTER" ~ "Sutter",
+                              county == "GLENN" ~ "Glenn",
+                              county ==  "PLACER" ~ "Placer",
+                              county ==  "SOLANO" ~ "Solano",
+                              county ==  "TEHEMA" ~ "Tehema",
+                             county ==  "SACRAMENTO" ~ "Sacramento")) %>% 
+          #filter(County %in% c("Butte", "Yuba", "Yolo", "Colusa", " Sutter", "Glenn", "Placer", "Sacramento")) %>% 
+  dplyr::select(-county, county_ansi_code) %>% 
+  rename(nass_acreage = planted_rice_acres) %>% 
+  mutate(year = as.factor(year))
+
+nass_c_maj_counties %>% 
+  group_by(County) %>% 
+  tally()
+
+nass_cdl <- left_join(cdl_acreage_maj_counties, nass_c_maj_counties, by = c("County", "year")) %>% 
+  mutate(cdl_acreage = cdl_acreage*0.404686) %>% 
+  mutate(nass_acreage = nass_acreage*0.404686)
+
+library(ggpubr)
+nass_vs_cd_plot <- ggplot(data = nass_cdl, aes(x = cdl_acreage, y = nass_acreage))+
+  geom_abline(slope = 1, linetype = "dashed")+
+  geom_point( color = "blue", shape = 21, size = 3, stroke = 1)+ #color = "blue", size = 3, stroke = 1
+  coord_cartesian(xlim = c(0, 68000), ylim = c(0, 68000))+
+  #geom_smooth(method = "lm")+
+  stat_cor(label.y = 65000, aes(label = paste(..rr.label..)), size = 6, digits = 3) +
+  theme_bw()+
+  xlab(expression(paste("CDL county area (ha)")))+
+  ylab(expression(paste("NASS county area (ha)")))+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        #axis.line = element_line(colour = "black"),
+       # axis.line.x.top = element_line(colour = "black"),
+        #axis.line.y.right = element_line(colour = "black"),
+        axis.ticks = element_line(),
+        text = element_text(size=16))+
+  scale_y_continuous(labels = scales::comma)+
+  scale_x_continuous(labels = scales::comma)
+
+nass_vs_cd_plot
+ggsave(nass_vs_cd_plot, filename =  "/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/NASS/output/nass_vs_cdl_plot_20221024.png")
+
+ 
+```
+
+
+
+
+
+```{r}
+cdl_acreage_maj_counties %>% 
+  ggplot(aes(x = year, y = acreage))+
+  geom_line(aes(color = NAME))+
+  geom_point(aes(shape = NAME))
+```
+
+
+
+
+
+
+
+
+
+```{r}
+#this is first try based on image from full iq reclass
+cdl_rice <- tibble(year = c(2007:2021),
+                   cdl_rice_acres = c(557030, 
+              506358,
+              540083,
+              539627,
+              561340,
+              542330, 
+              549065,
+              445246, 
+              424116, 
+              527065, 
+              433789, 
+              494703,
+              489479,
+              504238,
+              396784))
+
+cdl_rice <- tibble(
+  year = c(2007:2021),
+  cdl_acres = c(
+561183.1,			
+511190.7,			
+544982.4,			
+544180.2,			
+566340.2,			
+547393.4,			
+556032.4,			
+450826.9,			
+429520.1,			
+532753.7,	
+438454.2,			
+500490.3,			
+495362.9,			
+509760.3,			
+400917.7))	
+```
+
+
+
+
+```{r}
+nass_sacramento_valley <- nass_c %>% 
+  group_by(year) %>% 
+  summarise(nass_acres = sum(planted_rice_acres)) 
+
+full_dat <- full_join(cdl_rice, nass_sacramento_valley, by = "year") %>% 
+  mutate(year = as.factor(year))
+
+library(ggpubr)
+ggplot(data = full_dat, aes(x = cdl_acres, y = nass_acres))+
+  geom_point(aes())+
+  #geom_smooth(method = "lm")+
+  stat_cor(label.y = 550000, aes(label = paste(..rr.label.., ..p.label.., sep = "~`,`~"))) +
+  stat_regline_equation(label.y = 540000)+
+  geom_abline(slope = 1, linetype = "dashed")
+
+
+```
+
