@@ -1,0 +1,82 @@
+---
+title: "rotation_intensity_map"
+author: "Luke Salvato"
+date: "4/20/2022"
+output: html_document
+---
+
+Get land use change data set
+count rotations
+```{r data}
+soil_crops <- st_read("/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/soils/data/categorial_and_numeric_soil_data_at_field_level_20220413.geojson") 
+
+#this one has cetroids for each field (points)
+rots <- soil_crops %>% 
+  st_drop_geometry() %>% 
+  as_tibble() %>% 
+  pivot_longer(29:43, values_to="Crop", names_to = "year") %>%
+  mutate(year = gsub("crop_", "", year)) %>%
+  mutate(year = gsub("_name", "", year)) %>% 
+  mutate(rice = case_when(Crop %in% c("rice", "fallow") ~ 1, TRUE ~0)) %>% 
+  pivot_wider(names_from = year, values_from = c(Crop, rice)) %>% 
+  unite(string, "rice_2007":"rice_2021", sep = "", remove = TRUE, na.rm = TRUE) %>% 
+  filter(string != "00000000000000") %>% #incase there are still any fields that were never in rice, there shouldn't be
+  filter(string != "") %>% # for some reason had one blank string, so removed that. Now down to 12,375 fields
+  mutate(rotations = as.numeric(str_count(string, "10"))) %>% 
+ # mutate(rots = as.numeric(rots)) %>% 
+  select(OBJECTID_1, rotations) %>% 
+  left_join(., fields) %>% 
+  select(OBJECTID_1, rotations, geometry) %>% 
+  st_as_sf()
+  
+getwd()
+str(rots)
+#write_sf(rots, "/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/rice_rotation/ms/output/data/rotations_20220420.shp", delete_layer = TRUE)
+#May want to get actual field shapes for this at some point
+
+```
+
+```{r}
+fields <- st_read("/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/rice_area/reclassified_CDL/data/2007_to_2021_rice_area_fields_and_crops_20220413.geojson")%>% 
+  st_zm() %>% 
+  st_as_sf() %>% 
+  st_make_valid() %>% 
+  select(geometry, OBJECTID_1)
+
+rots_fields <- st_join(fields, rots, join = st_intersects, by = "OBJECTID_1", left = TRUE) %>% 
+  select(OBJECTID_1.x, rotations) %>% 
+  rename(OBJECTID_1 = OBJECTID_1.x) %>% 
+  st_transform(crs = st_crs(rots)) %>% 
+  na.omit()
+```
+```{r}
+write_sf(rots, "/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/rice_rotation/ms/output/data/rotations_points_20220421.shp", delete_layer = TRUE)
+
+write_sf(rots_fields, "/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/rice_rotation/ms/output/data/rotations_fields_20220421.shp", delete_layer = TRUE)
+```
+
+
+
+
+```{r counties}
+counties <- st_read("/Users/lukesalvato/Dropbox/Mac (3)/Documents/Land_Use/rice_area/data/processed/rice_counties_geom_2") %>% 
+  select(NAME) %>%
+  st_zm() %>% 
+  st_transform(crs = st_crs(rots))
+```
+
+
+visuaize
+```{r map}
+tmap_mode("plot")
+m1 <- tm_shape(rots) +
+  tm_dots("rotations", palette = "BuPu", border.alpha = 0.5)+
+  tm_shape(counties) +
+  tm_text("NAME") +
+  tm_borders(col = "black")
+
+
+  
+m1
+```
+
