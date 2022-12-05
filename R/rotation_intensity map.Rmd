@@ -72,6 +72,6 @@ m1 <- tm_shape(rots) +
 
 
   
-m1
+m1 
 ```
 
